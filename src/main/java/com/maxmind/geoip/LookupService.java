@@ -30,6 +30,7 @@ import java.net.UnknownHostException;
 import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.StringTokenizer;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.naming.NamingException;
 import javax.naming.directory.Attributes;
@@ -87,23 +88,22 @@ public class LookupService {
 	/**
 	 * Information about the database.
 	 */
-	private DatabaseInfo databaseInfo = null;
+//	private DatabaseInfo databaseInfo = null;
 
 	/**
 	 * The database type. Default is the country edition.
 	 */
-	byte databaseType = DatabaseInfo.COUNTRY_EDITION;
+//	byte databaseType = DatabaseInfo.COUNTRY_EDITION;
 
-	int databaseSegments[];
-	int recordLength;
+//	int databaseSegments[];
+//	int recordLength;
 
 	String licenseKey;
 	int dnsService = 0;
 	int dboptions;
-	byte dbbuffer[];
-	byte index_cache[];
-	long mtime;
-	int last_netmask;
+//	byte dbbuffer[];
+//	byte index_cache[];
+
 	private final static int US_OFFSET = 1;
 	private final static int CANADA_OFFSET = 677;
 	private final static int WORLD_OFFSET = 1353;
@@ -132,10 +132,14 @@ public class LookupService {
 
 	private final Country UNKNOWN_COUNTRY = new Country("--", "N/A");
 
+    private final AtomicReference<CacheLayer> actualCache = new AtomicReference<CacheLayer>();
+
+/*
 	private static final HashMap<String, Integer> hashmapcountryCodetoindex = new HashMap<String, Integer>(
 			512);
 	private static final HashMap<String, Integer> hashmapcountryNametoindex = new HashMap<String, Integer>(
 			512);
+*/
 	private static final String[] countryCode = { "--", "AP", "EU", "AD", "AE",
 			"AF", "AG", "AI", "AL", "AM", "CW", "AO", "AQ", "AR", "AS", "AT",
 			"AU", "AW", "AZ", "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI",
@@ -233,10 +237,12 @@ public class LookupService {
 			throw new AssertionError("countryCode.length!=countryName.length");
 
 		// distributed service only
+        /*
 		for (i = 0; i < countryCode.length; i++) {
 			hashmapcountryCodetoindex.put(countryCode[i], Integer.valueOf(i));
 			hashmapcountryNametoindex.put(countryName[i], Integer.valueOf(i));
 		}
+		*/
 	}
 
 	/**
@@ -359,62 +365,71 @@ public class LookupService {
 		byte[] delim = new byte[3];
 		byte[] buf = new byte[SEGMENT_RECORD_LENGTH];
 
+        CacheLayer cacheLayer = new CacheLayer(this);
+
 		if (file == null) {
+            cacheLayer.hashmapcountryCodetoindex.clear();
+            // distributed service only
+            for (i = 0; i < 233; i++)
+            {
+                cacheLayer.hashmapcountryCodetoindex.put(countryCode[i], new Integer(i));
+                cacheLayer.hashmapcountryNametoindex.put(countryName[i], new Integer(i));
+            }
 			return;
 		}
 		if ((dboptions & GEOIP_CHECK_CACHE) != 0) {
-			mtime = databaseFile.lastModified();
+            cacheLayer.mtime = databaseFile.lastModified();
 		}
 		file.seek(file.length() - 3);
 		for (i = 0; i < STRUCTURE_INFO_MAX_SIZE; i++) {
 			file.readFully(delim);
 			if (delim[0] == -1 && delim[1] == -1 && delim[2] == -1) {
-				databaseType = file.readByte();
-				if (databaseType >= 106) {
+                cacheLayer.databaseType = file.readByte();
+				if (cacheLayer.databaseType >= 106) {
 					// Backward compatibility with databases from April 2003 and
 					// earlier
-					databaseType -= 105;
+                    cacheLayer.databaseType -= 105;
 				}
 				// Determine the database type.
-				if (databaseType == DatabaseInfo.REGION_EDITION_REV0) {
-					databaseSegments = new int[1];
-					databaseSegments[0] = STATE_BEGIN_REV0;
-					recordLength = STANDARD_RECORD_LENGTH;
-				} else if (databaseType == DatabaseInfo.REGION_EDITION_REV1) {
-					databaseSegments = new int[1];
-					databaseSegments[0] = STATE_BEGIN_REV1;
-					recordLength = STANDARD_RECORD_LENGTH;
-				} else if (databaseType == DatabaseInfo.CITY_EDITION_REV0
-						|| databaseType == DatabaseInfo.CITY_EDITION_REV1
-						|| databaseType == DatabaseInfo.ORG_EDITION
-						|| databaseType == DatabaseInfo.ORG_EDITION_V6
-						|| databaseType == DatabaseInfo.ISP_EDITION
-						|| databaseType == DatabaseInfo.ISP_EDITION_V6
-						|| databaseType == DatabaseInfo.DOMAIN_EDITION
-						|| databaseType == DatabaseInfo.DOMAIN_EDITION_V6
-						|| databaseType == DatabaseInfo.ASNUM_EDITION
-						|| databaseType == DatabaseInfo.ASNUM_EDITION_V6
-						|| databaseType == DatabaseInfo.NETSPEED_EDITION_REV1
-						|| databaseType == DatabaseInfo.NETSPEED_EDITION_REV1_V6
-						|| databaseType == DatabaseInfo.CITY_EDITION_REV0_V6
-						|| databaseType == DatabaseInfo.CITY_EDITION_REV1_V6) {
-					databaseSegments = new int[1];
-					databaseSegments[0] = 0;
-					if (databaseType == DatabaseInfo.CITY_EDITION_REV0
-							|| databaseType == DatabaseInfo.CITY_EDITION_REV1
-							|| databaseType == DatabaseInfo.ASNUM_EDITION_V6
-							|| databaseType == DatabaseInfo.NETSPEED_EDITION_REV1
-							|| databaseType == DatabaseInfo.NETSPEED_EDITION_REV1_V6
-							|| databaseType == DatabaseInfo.CITY_EDITION_REV0_V6
-							|| databaseType == DatabaseInfo.CITY_EDITION_REV1_V6
-							|| databaseType == DatabaseInfo.ASNUM_EDITION) {
-						recordLength = STANDARD_RECORD_LENGTH;
+				if (cacheLayer.databaseType == DatabaseInfo.REGION_EDITION_REV0) {
+                    cacheLayer.databaseSegments = new int[1];
+                    cacheLayer.databaseSegments[0] = STATE_BEGIN_REV0;
+                    cacheLayer.recordLength = STANDARD_RECORD_LENGTH;
+				} else if (cacheLayer.databaseType == DatabaseInfo.REGION_EDITION_REV1) {
+                    cacheLayer.databaseSegments = new int[1];
+                    cacheLayer.databaseSegments[0] = STATE_BEGIN_REV1;
+                    cacheLayer.recordLength = STANDARD_RECORD_LENGTH;
+				} else if (cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV0
+						|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV1
+						|| cacheLayer.databaseType == DatabaseInfo.ORG_EDITION
+						|| cacheLayer.databaseType == DatabaseInfo.ORG_EDITION_V6
+						|| cacheLayer.databaseType == DatabaseInfo.ISP_EDITION
+						|| cacheLayer.databaseType == DatabaseInfo.ISP_EDITION_V6
+						|| cacheLayer.databaseType == DatabaseInfo.DOMAIN_EDITION
+						|| cacheLayer.databaseType == DatabaseInfo.DOMAIN_EDITION_V6
+						|| cacheLayer.databaseType == DatabaseInfo.ASNUM_EDITION
+						|| cacheLayer.databaseType == DatabaseInfo.ASNUM_EDITION_V6
+						|| cacheLayer.databaseType == DatabaseInfo.NETSPEED_EDITION_REV1
+						|| cacheLayer.databaseType == DatabaseInfo.NETSPEED_EDITION_REV1_V6
+						|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV0_V6
+						|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV1_V6) {
+                    cacheLayer.databaseSegments = new int[1];
+                    cacheLayer.databaseSegments[0] = 0;
+					if (cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV0
+							|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV1
+							|| cacheLayer.databaseType == DatabaseInfo.ASNUM_EDITION_V6
+							|| cacheLayer.databaseType == DatabaseInfo.NETSPEED_EDITION_REV1
+							|| cacheLayer.databaseType == DatabaseInfo.NETSPEED_EDITION_REV1_V6
+							|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV0_V6
+							|| cacheLayer.databaseType == DatabaseInfo.CITY_EDITION_REV1_V6
+							|| cacheLayer.databaseType == DatabaseInfo.ASNUM_EDITION) {
+                        cacheLayer.recordLength = STANDARD_RECORD_LENGTH;
 					} else {
-						recordLength = ORG_RECORD_LENGTH;
+                        cacheLayer.recordLength = ORG_RECORD_LENGTH;
 					}
 					file.readFully(buf);
 					for (j = 0; j < SEGMENT_RECORD_LENGTH; j++) {
-						databaseSegments[0] += (unsignedByteToInt(buf[j]) << (j * 8));
+                        cacheLayer.databaseSegments[0] += (unsignedByteToInt(buf[j]) << (j * 8));
 					}
 				}
 				break;
@@ -422,32 +437,38 @@ public class LookupService {
 				file.seek(file.getFilePointer() - 4);
 			}
 		}
-		if ((databaseType == DatabaseInfo.COUNTRY_EDITION)
-				|| (databaseType == DatabaseInfo.COUNTRY_EDITION_V6)
-				|| (databaseType == DatabaseInfo.PROXY_EDITION)
-				|| (databaseType == DatabaseInfo.NETSPEED_EDITION)) {
-			databaseSegments = new int[1];
-			databaseSegments[0] = COUNTRY_BEGIN;
-			recordLength = STANDARD_RECORD_LENGTH;
+		if ((cacheLayer.databaseType == DatabaseInfo.COUNTRY_EDITION)
+				|| (cacheLayer.databaseType == DatabaseInfo.COUNTRY_EDITION_V6)
+				|| (cacheLayer.databaseType == DatabaseInfo.PROXY_EDITION)
+				|| (cacheLayer.databaseType == DatabaseInfo.NETSPEED_EDITION)) {
+            cacheLayer.databaseSegments = new int[1];
+            cacheLayer.databaseSegments[0] = COUNTRY_BEGIN;
+            cacheLayer.recordLength = STANDARD_RECORD_LENGTH;
 		}
 		if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 			int l = (int) file.length();
-			dbbuffer = new byte[l];
+            cacheLayer.dbbuffer = new byte[l];
 			file.seek(0);
-			file.readFully(dbbuffer, 0, l);
-			databaseInfo = this.getDatabaseInfo();
+			file.readFully(cacheLayer.dbbuffer, 0, l);
+            cacheLayer.databaseInfo = this.getDatabaseInfo();
 			file.close();
 		}
 		if ((dboptions & GEOIP_INDEX_CACHE) != 0) {
-			int l = databaseSegments[0] * recordLength * 2;
-			index_cache = new byte[l];
-			if (index_cache != null) {
+			int l = cacheLayer.databaseSegments[0] * cacheLayer.recordLength * 2;
+            cacheLayer.index_cache = new byte[l];
+			if (cacheLayer.index_cache != null) {
 				file.seek(0);
-				file.readFully(index_cache, 0, l);
+				file.readFully(cacheLayer.index_cache, 0, l);
 			}
 		} else {
-			index_cache = null;
+            cacheLayer.index_cache = null;
 		}
+        CacheLayer oldCacheLayer = actualCache.getAndSet(cacheLayer);
+        if ( oldCacheLayer != null )
+        {
+            oldCacheLayer.isCheck = false;
+        }
+
 	}
 
 	/**
@@ -504,7 +525,7 @@ public class LookupService {
 	 *            the IP address.
 	 * @return the country the IP address is from.
 	 */
-	public synchronized Country getCountry(InetAddress ipAddress) {
+	public Country getCountry(InetAddress ipAddress) {
 		return getCountry(bytesToLong(ipAddress.getAddress()));
 	}
 
@@ -519,7 +540,7 @@ public class LookupService {
 		if (file == null && (dboptions & GEOIP_MEMORY_CACHE) == 0) {
 			throw new IllegalStateException("Database has been closed.");
 		}
-		int ret = seekCountryV6(addr) - COUNTRY_BEGIN;
+		int ret = seekCountryV6(addr, actualCache.get()) - COUNTRY_BEGIN;
 		if (ret == 0) {
 			return UNKNOWN_COUNTRY;
 		} else {
@@ -538,7 +559,7 @@ public class LookupService {
 		if (file == null && (dboptions & GEOIP_MEMORY_CACHE) == 0) {
 			throw new IllegalStateException("Database has been closed.");
 		}
-		int ret = seekCountry(ipAddress) - COUNTRY_BEGIN;
+		int ret = seekCountry(ipAddress, actualCache.get()) - COUNTRY_BEGIN;
 		if (ret == 0) {
 			return UNKNOWN_COUNTRY;
 		} else {
@@ -560,20 +581,21 @@ public class LookupService {
 		return getID(bytesToLong(ipAddress.getAddress()));
 	}
 
-	public synchronized int getID(long ipAddress) {
+	public int getID(long ipAddress) {
 		if (file == null && (dboptions & GEOIP_MEMORY_CACHE) == 0) {
 			throw new IllegalStateException("Database has been closed.");
 		}
-		int ret = seekCountry(ipAddress) - databaseSegments[0];
+        CacheLayer cl = actualCache.get();
+		int ret = seekCountry(ipAddress, cl) - cl.databaseSegments[0];
 		return ret;
 	}
 
 	public int last_netmask() {
-		return this.last_netmask;
+		return this.actualCache.get().last_netmask;
 	}
 
 	public void netmask(int nm) {
-		this.last_netmask = nm;
+		this.actualCache.get().last_netmask = nm;
 	}
 
 	/**
@@ -581,12 +603,15 @@ public class LookupService {
 	 * 
 	 * @return database info.
 	 */
-	public synchronized DatabaseInfo getDatabaseInfo() {
-		if (databaseInfo != null) {
-			return databaseInfo;
-		}
+	public DatabaseInfo getDatabaseInfo() {
+        CacheLayer cl = actualCache.get();
+        if (cl != null && cl.databaseInfo != null)
+        {
+            return cl.databaseInfo;
+        }
+        DatabaseInfo databaseInfo;
+
 		try {
-			_check_mtime();
 			boolean hasStructureInfo = false;
 			byte[] delim = new byte[3];
 			// Advance to part of file where database info is stored.
@@ -615,7 +640,7 @@ public class LookupService {
 					byte[] dbInfo = new byte[i];
 					file.readFully(dbInfo);
 					// Create the database info object using the string.
-					this.databaseInfo = new DatabaseInfo(new String(dbInfo));
+					databaseInfo = new DatabaseInfo(new String(dbInfo));
 					return databaseInfo;
 				}
 				file.seek(file.getFilePointer() - 4);
@@ -626,16 +651,17 @@ public class LookupService {
 		return new DatabaseInfo("");
 	}
 
-	synchronized void _check_mtime() {
+    synchronized void _check_mtime() {
 		try {
 			if ((dboptions & GEOIP_CHECK_CACHE) != 0) {
 				long t = databaseFile.lastModified();
-				if (t != mtime) {
+                CacheLayer cl = actualCache.get();
+				if (t != cl.mtime) {
 					/* GeoIP Database file updated */
 					/* refresh filehandle */
 					close();
 					file = new RandomAccessFile(databaseFile, "r");
-					databaseInfo = null;
+					cl.databaseInfo = null;
 					init();
 				}
 			}
@@ -720,7 +746,7 @@ public class LookupService {
 				value = "";
 			}
 			if (key.equals("co")) {
-				Integer i = (Integer) hashmapcountryCodetoindex.get(value);
+				Integer i = (Integer) actualCache.get().hashmapcountryCodetoindex.get(value);
 				record.countryCode = value;
 				record.countryName = countryName[i.intValue()];
 			}
@@ -774,7 +800,7 @@ public class LookupService {
 		return record;
 	}
 
-	public synchronized Region getRegion(String str) {
+	public Region getRegion(String str) {
 		InetAddress addr;
 		try {
 			addr = InetAddress.getByName(str);
@@ -785,11 +811,12 @@ public class LookupService {
 		return getRegion(bytesToLong(addr.getAddress()));
 	}
 
-	public synchronized Region getRegion(long ipnum) {
+	public Region getRegion(long ipnum) {
 		Region record = new Region();
 		int seek_region = 0;
-		if (databaseType == DatabaseInfo.REGION_EDITION_REV0) {
-			seek_region = seekCountry(ipnum) - STATE_BEGIN_REV0;
+        CacheLayer cl = actualCache.get();
+		if (cl.databaseType == DatabaseInfo.REGION_EDITION_REV0) {
+			seek_region = seekCountry(ipnum, cl) - STATE_BEGIN_REV0;
 			char ch[] = new char[2];
 			if (seek_region >= 1000) {
 				record.countryCode = "US";
@@ -802,8 +829,8 @@ public class LookupService {
 				record.countryName = countryName[seek_region];
 				record.region = "";
 			}
-		} else if (databaseType == DatabaseInfo.REGION_EDITION_REV1) {
-			seek_region = seekCountry(ipnum) - STATE_BEGIN_REV1;
+		} else if (cl.databaseType == DatabaseInfo.REGION_EDITION_REV1) {
+			seek_region = seekCountry(ipnum, cl) - STATE_BEGIN_REV1;
 			char ch[] = new char[2];
 			if (seek_region < US_OFFSET) {
 				record.countryCode = "";
@@ -832,7 +859,7 @@ public class LookupService {
 		return record;
 	}
 
-	public synchronized Location getLocationV6(InetAddress addr) {
+	public Location getLocationV6(InetAddress addr) {
 		int record_pointer;
 		byte record_buf[] = new byte[FULL_RECORD_LENGTH];
 		int record_buf_offset = 0;
@@ -841,18 +868,20 @@ public class LookupService {
 		int j, seek_country;
 		double latitude = 0, longitude = 0;
 
+        CacheLayer cl = actualCache.get();
+        cl.checkHandler();
 		try {
-			seek_country = seekCountryV6(addr);
-			if (seek_country == databaseSegments[0]) {
+			seek_country = seekCountryV6(addr, cl);
+			if (seek_country == cl.databaseSegments[0]) {
 				return null;
 			}
-			record_pointer = seek_country + (2 * recordLength - 1)
-					* databaseSegments[0];
+			record_pointer = seek_country + (2 * cl.recordLength - 1)
+					* cl.databaseSegments[0];
 
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
-				System.arraycopy(dbbuffer, record_pointer, record_buf, 0, Math
-						.min(dbbuffer.length - record_pointer,
+				System.arraycopy(cl.dbbuffer, record_pointer, record_buf, 0, Math
+						.min(cl.dbbuffer.length - record_pointer,
 								FULL_RECORD_LENGTH));
 			} else {
 				// read from disk
@@ -908,7 +937,7 @@ public class LookupService {
 
 			record.dma_code = record.metro_code = 0;
 			record.area_code = 0;
-			if (databaseType == DatabaseInfo.CITY_EDITION_REV1) {
+			if (cl.databaseType == DatabaseInfo.CITY_EDITION_REV1) {
 				// get DMA code
 				int metroarea_combo = 0;
 				if ("US".equals(record.countryCode)) {
@@ -926,7 +955,7 @@ public class LookupService {
 		return record;
 	}
 
-	public synchronized Location getLocation(long ipnum) {
+	public Location getLocation(long ipnum) {
 		int record_pointer;
 		byte record_buf[] = new byte[FULL_RECORD_LENGTH];
 		int record_buf_offset = 0;
@@ -935,18 +964,20 @@ public class LookupService {
 		int j, seek_country;
 		double latitude = 0, longitude = 0;
 
+        CacheLayer cl = actualCache.get();
+        cl.checkHandler();
 		try {
-			seek_country = seekCountry(ipnum);
-			if (seek_country == databaseSegments[0]) {
+			seek_country = seekCountry(ipnum, cl);
+			if (seek_country == cl.databaseSegments[0]) {
 				return null;
 			}
-			record_pointer = seek_country + (2 * recordLength - 1)
-					* databaseSegments[0];
+			record_pointer = seek_country + (2 * cl.recordLength - 1)
+					* cl.databaseSegments[0];
 
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
-				System.arraycopy(dbbuffer, record_pointer, record_buf, 0, Math
-						.min(dbbuffer.length - record_pointer,
+				System.arraycopy(cl.dbbuffer, record_pointer, record_buf, 0, Math
+						.min(cl.dbbuffer.length - record_pointer,
 								FULL_RECORD_LENGTH));
 			} else {
 				// read from disk
@@ -1002,7 +1033,7 @@ public class LookupService {
 
 			record.dma_code = record.metro_code = 0;
 			record.area_code = 0;
-			if (databaseType == DatabaseInfo.CITY_EDITION_REV1) {
+			if (cl.databaseType == DatabaseInfo.CITY_EDITION_REV1) {
 				// get DMA code
 				int metroarea_combo = 0;
 				if (record.countryCode == "US") {
@@ -1035,25 +1066,25 @@ public class LookupService {
 	}
 
 	// GeoIP Organization and ISP Edition methods
-	public synchronized String getOrg(long ipnum) {
+	public String getOrg(long ipnum) {
 		int seek_org;
 		int record_pointer;
 		int str_length = 0;
 		byte[] buf = new byte[MAX_ORG_RECORD_LENGTH];
 		String org_buf;
-
+        CacheLayer cl = actualCache.get();
 		try {
-			seek_org = seekCountry(ipnum);
-			if (seek_org == databaseSegments[0]) {
+			seek_org = seekCountry(ipnum, cl);
+			if (seek_org == cl.databaseSegments[0]) {
 				return null;
 			}
 
-			record_pointer = seek_org + (2 * recordLength - 1)
-					* databaseSegments[0];
+			record_pointer = seek_org + (2 * cl.recordLength - 1)
+					* cl.databaseSegments[0];
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
-				System.arraycopy(dbbuffer, record_pointer, buf, 0, Math
-						.min(dbbuffer.length - record_pointer,
+				System.arraycopy(cl.dbbuffer, record_pointer, buf, 0, Math
+						.min(cl.dbbuffer.length - record_pointer,
 								MAX_ORG_RECORD_LENGTH));
 			} else {
 				// read from disk
@@ -1086,25 +1117,25 @@ public class LookupService {
 	}
 
 	// GeoIP Organization and ISP Edition methods
-	public synchronized String getOrgV6(InetAddress addr) {
+	public  String getOrgV6(InetAddress addr) {
 		int seek_org;
 		int record_pointer;
 		int str_length = 0;
 		byte[] buf = new byte[MAX_ORG_RECORD_LENGTH];
 		String org_buf;
-
+        CacheLayer cl = actualCache.get();
 		try {
-			seek_org = seekCountryV6(addr);
-			if (seek_org == databaseSegments[0]) {
+			seek_org = seekCountryV6(addr, cl);
+			if (seek_org == cl.databaseSegments[0]) {
 				return null;
 			}
 
-			record_pointer = seek_org + (2 * recordLength - 1)
-					* databaseSegments[0];
+			record_pointer = seek_org + (2 * cl.recordLength - 1)
+					* cl.databaseSegments[0];
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
-				System.arraycopy(dbbuffer, record_pointer, buf, 0, Math
-						.min(dbbuffer.length - record_pointer,
+				System.arraycopy(cl.dbbuffer, record_pointer, buf, 0, Math
+						.min(cl.dbbuffer.length - record_pointer,
 								MAX_ORG_RECORD_LENGTH));
 			} else {
 				// read from disk
@@ -1129,7 +1160,7 @@ public class LookupService {
 	 *            the ip address to find in long format.
 	 * @return the country index.
 	 */
-	private synchronized int seekCountryV6(InetAddress addr) {
+	private int seekCountryV6(InetAddress addr, final CacheLayer cl) {
 		byte[] v6vec = addr.getAddress();
 
 		if (v6vec.length == 4) {
@@ -1149,17 +1180,17 @@ public class LookupService {
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
 				for (int i = 0; i < 2 * MAX_RECORD_LENGTH; i++) {
-					buf[i] = dbbuffer[(2 * recordLength * offset) + i];
+					buf[i] = cl.dbbuffer[(2 * cl.recordLength * offset) + i];
 				}
 			} else if ((dboptions & GEOIP_INDEX_CACHE) != 0) {
 				// read from index cache
 				for (int i = 0; i < 2 * MAX_RECORD_LENGTH; i++) {
-					buf[i] = index_cache[(2 * recordLength * offset) + i];
+					buf[i] = cl.index_cache[(2 * cl.recordLength * offset) + i];
 				}
 			} else {
 				// read from disk
 				try {
-					file.seek(2 * recordLength * offset);
+					file.seek(2 * cl.recordLength * offset);
 					file.readFully(buf);
 				} catch (IOException e) {
 					System.out.println("IO Exception");
@@ -1167,8 +1198,8 @@ public class LookupService {
 			}
 			for (int i = 0; i < 2; i++) {
 				x[i] = 0;
-				for (int j = 0; j < recordLength; j++) {
-					int y = buf[i * recordLength + j];
+				for (int j = 0; j < cl.recordLength; j++) {
+					int y = buf[i * cl.recordLength + j];
 					if (y < 0) {
 						y += 256;
 					}
@@ -1180,14 +1211,14 @@ public class LookupService {
 			int idx = bnum >> 3;
 			int b_mask = 1 << (bnum & 7 ^ 7);
 			if ((v6vec[idx] & b_mask) > 0) {
-				if (x[1] >= databaseSegments[0]) {
-					last_netmask = 128 - depth;
+				if (x[1] >= cl.databaseSegments[0]) {
+					cl.last_netmask = 128 - depth;
 					return x[1];
 				}
 				offset = x[1];
 			} else {
-				if (x[0] >= databaseSegments[0]) {
-					last_netmask = 128 - depth;
+				if (x[0] >= cl.databaseSegments[0]) {
+					cl.last_netmask = 128 - depth;
 					return x[0];
 				}
 				offset = x[0];
@@ -1207,26 +1238,26 @@ public class LookupService {
 	 *            the ip address to find in long format.
 	 * @return the country index.
 	 */
-	private synchronized int seekCountry(long ipAddress) {
+	private int seekCountry(long ipAddress, final CacheLayer cl) {
 		byte[] buf = new byte[2 * MAX_RECORD_LENGTH];
 		int[] x = new int[2];
 		int offset = 0;
-		_check_mtime();
+
 		for (int depth = 31; depth >= 0; depth--) {
 			if ((dboptions & GEOIP_MEMORY_CACHE) == 1) {
 				// read from memory
 				for (int i = 0; i < 2 * MAX_RECORD_LENGTH; i++) {
-					buf[i] = dbbuffer[(2 * recordLength * offset) + i];
+					buf[i] = cl.dbbuffer[(2 * cl.recordLength * offset) + i];
 				}
 			} else if ((dboptions & GEOIP_INDEX_CACHE) != 0) {
 				// read from index cache
 				for (int i = 0; i < 2 * MAX_RECORD_LENGTH; i++) {
-					buf[i] = index_cache[(2 * recordLength * offset) + i];
+					buf[i] = cl.index_cache[(2 * cl.recordLength * offset) + i];
 				}
 			} else {
 				// read from disk
 				try {
-					file.seek(2 * recordLength * offset);
+					file.seek(2 * cl.recordLength * offset);
 					file.readFully(buf);
 				} catch (IOException e) {
 					System.out.println("IO Exception");
@@ -1234,8 +1265,8 @@ public class LookupService {
 			}
 			for (int i = 0; i < 2; i++) {
 				x[i] = 0;
-				for (int j = 0; j < recordLength; j++) {
-					int y = buf[i * recordLength + j];
+				for (int j = 0; j < cl.recordLength; j++) {
+					int y = buf[i * cl.recordLength + j];
 					if (y < 0) {
 						y += 256;
 					}
@@ -1244,14 +1275,14 @@ public class LookupService {
 			}
 
 			if ((ipAddress & (1 << depth)) > 0) {
-				if (x[1] >= databaseSegments[0]) {
-					last_netmask = 32 - depth;
+				if (x[1] >= cl.databaseSegments[0]) {
+					cl.last_netmask = 32 - depth;
 					return x[1];
 				}
 				offset = x[1];
 			} else {
-				if (x[0] >= databaseSegments[0]) {
-					last_netmask = 32 - depth;
+				if (x[0] >= cl.databaseSegments[0]) {
+					cl.last_netmask = 32 - depth;
 					return x[0];
 				}
 				offset = x[0];
